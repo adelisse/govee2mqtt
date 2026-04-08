@@ -709,7 +709,7 @@ async fn mqtt_light_segment_command(
 
         if let Some(brightness) = command.brightness {
             client
-                .set_segment_brightness(&info, segment, brightness)
+                .set_segment_brightness(info, segment, brightness)
                 .await?;
         } else if command.state == "OFF" {
             // Do nothing here. We used to set brightness to zero,
@@ -723,7 +723,7 @@ async fn mqtt_light_segment_command(
         }
         if let Some(color) = &command.color {
             client
-                .set_segment_rgb(&info, segment, color.r, color.g, color.b)
+                .set_segment_rgb(info, segment, color.r, color.g, color.b)
                 .await?;
         }
     } else if let Some(lan_dev) = &device.lan_device {
@@ -913,7 +913,7 @@ async fn mqtt_oneclick(
         }
     };
 
-    match iot.activate_one_click(&item).await {
+    match iot.activate_one_click(item).await {
         Ok(()) => {
             log::info!("One-click '{name}' activated successfully");
             Ok(())
@@ -1132,7 +1132,7 @@ async fn run_mqtt_loop(
             .get_hass_client()
             .await
             .expect("have hass client")
-            .register_with_hass(&state)
+            .register_with_hass(state)
             .await
             .context("register_with_hass")?;
 

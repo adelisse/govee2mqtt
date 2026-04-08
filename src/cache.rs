@@ -37,7 +37,7 @@ fn cache_file_name() -> PathBuf {
     let cache_dir = std::env::var("GOVEE_CACHE_DIR")
         .ok()
         .map(PathBuf::from)
-        .or_else(|| dirs_next::cache_dir())
+        .or_else(dirs_next::cache_dir)
         .expect("failed to resolve cache dir");
 
     cache_dir.join("govee2mqtt-cache.sqlite")
@@ -80,7 +80,7 @@ pub fn purge_cache() -> anyhow::Result<()> {
     let cache_file = cache_file_name();
     std::fs::remove_file(&cache_file)
         .with_context(|| format!("removing cache file {cache_file:?}"))?;
-    CACHE.store(open_cache()?.into());
+    CACHE.store(open_cache()?);
     Ok(())
 }
 

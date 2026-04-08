@@ -250,8 +250,8 @@ impl GoveeApiClient {
     ) -> anyhow::Result<Vec<DeviceCapability>> {
         let mut result = vec![];
 
-        let scene_caps = self.get_device_scenes(&device).await?;
-        let diy_caps = self.get_device_diy_scenes(&device).await?;
+        let scene_caps = self.get_device_scenes(device).await?;
+        let diy_caps = self.get_device_diy_scenes(device).await?;
         let undoc_caps =
             match GoveeUndocumentedApi::synthesize_platform_api_scene_list(&device.sku).await {
                 Ok(caps) => caps,
@@ -470,13 +470,10 @@ impl GoveeApiClient {
             if let Some(DeviceParameters::Struct { fields }) = &cap.parameters {
                 for f in fields {
                     if f.field_name == "musicMode" {
-                        match &f.field_type {
-                            DeviceParameters::Enum { options } => {
-                                for opt in options {
-                                    result.push(format!("Music: {}", opt.name));
-                                }
+                        if let DeviceParameters::Enum { options } = &f.field_type {
+                            for opt in options {
+                                result.push(format!("Music: {}", opt.name));
                             }
-                            _ => {}
                         }
                     }
                 }
@@ -495,7 +492,7 @@ impl GoveeApiClient {
         device: &HttpDeviceInfo,
         scene: &str,
     ) -> anyhow::Result<ControlDeviceResponseCapability> {
-        if scene == "" {
+        if scene.is_empty() {
             // Can't set no scene
             anyhow::bail!("Cannot set scene to no-scene");
         }
@@ -509,7 +506,7 @@ impl GoveeApiClient {
                             "sensitivity": 100,
                             "autoColor": 1,
                         });
-                        return self.control_device(&device, &cap, value).await;
+                        return self.control_device(device, cap, value).await;
                     }
                 }
             }
@@ -521,7 +518,7 @@ impl GoveeApiClient {
                 Some(DeviceParameters::Enum { options }) => {
                     for opt in options {
                         if scene.eq_ignore_ascii_case(&opt.name) {
-                            return self.control_device(&device, &cap, opt.value.clone()).await;
+                            return self.control_device(device, &cap, opt.value.clone()).await;
                         }
                     }
                 }
@@ -559,7 +556,7 @@ impl GoveeApiClient {
             "unit": "Celsius",
         });
 
-        self.control_device(&device, &cap, value).await
+        self.control_device(device, cap, value).await
     }
 
     pub async fn set_work_mode(
@@ -577,7 +574,7 @@ impl GoveeApiClient {
             "modeValue": value
         });
 
-        self.control_device(&device, &cap, value).await
+        self.control_device(device, cap, value).await
     }
 
     pub async fn set_toggle_state(
@@ -594,7 +591,7 @@ impl GoveeApiClient {
             .enum_parameter_by_name(if on { "on" } else { "off" })
             .ok_or_else(|| anyhow::anyhow!("{instance} has no on/off!?"))?;
 
-        self.control_device(&device, &cap, value).await
+        self.control_device(device, cap, value).await
     }
 
     pub async fn set_power_state(
@@ -620,7 +617,7 @@ impl GoveeApiClient {
             }) => (percent as u32).max(*min).min(*max),
             _ => anyhow::bail!("unexpected parameter type for brightness"),
         };
-        self.control_device(&device, &cap, value).await
+        self.control_device(device, cap, value).await
     }
 
     pub async fn set_color_temperature(
@@ -638,7 +635,7 @@ impl GoveeApiClient {
             }) => (kelvin).max(*min).min(*max),
             _ => anyhow::bail!("unexpected parameter type for colorTemperatureK"),
         };
-        self.control_device(&device, &cap, value).await
+        self.control_device(device, cap, value).await
     }
 
     pub async fn set_color_rgb(
@@ -652,7 +649,7 @@ impl GoveeApiClient {
             .capability_by_instance("colorRgb")
             .ok_or_else(|| anyhow::anyhow!("device has no colorRgb"))?;
         let value = ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
-        self.control_device(&device, &cap, value).await
+        self.control_device(device, cap, value).await
     }
 
     pub async fn set_segment_rgb(
@@ -668,8 +665,8 @@ impl GoveeApiClient {
             .ok_or_else(|| anyhow::anyhow!("device has no segmentedColorRgb"))?;
         let value = ((r as u32) << 16) | ((g as u32) << 8) | (b as u32);
         self.control_device(
-            &device,
-            &cap,
+            device,
+            cap,
             json!({
                 "segment": vec![segment],
                 "rgb": value,
@@ -695,8 +692,8 @@ impl GoveeApiClient {
         let value = (percent as u32).max(min).min(max);
 
         self.control_device(
-            &device,
-            &cap,
+            device,
+            cap,
             json!({
                 "segment": vec![segment],
                 "brightness": value,
