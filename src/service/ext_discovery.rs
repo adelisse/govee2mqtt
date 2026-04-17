@@ -13,6 +13,12 @@ pub struct DiscoveryExtension {
     interval_ticks: u64,
 }
 
+impl Default for DiscoveryExtension {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl DiscoveryExtension {
     pub fn new() -> Self {
         Self {
@@ -31,7 +37,7 @@ impl Extension for DiscoveryExtension {
 
     async fn tick(&self, state: &StateHandle) -> anyhow::Result<()> {
         let count = self.tick_count.fetch_add(1, Ordering::Relaxed);
-        if count % self.interval_ticks != 0 || count == 0 {
+        if !count.is_multiple_of(self.interval_ticks) || count == 0 {
             // Skip — not time yet, and skip the very first tick (startup already discovered)
             return Ok(());
         }

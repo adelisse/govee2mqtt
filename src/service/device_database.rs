@@ -115,8 +115,10 @@ mod tests {
     use super::*;
 
     fn sample_device_database() -> DeviceDatabase {
-        let mut db = DeviceDatabase::default();
-        db.version = 1;
+        let mut db = DeviceDatabase {
+            version: 1,
+            ..Default::default()
+        };
         db.devices.insert(
             "AA:BB:CC".into(),
             PersistedDevice {

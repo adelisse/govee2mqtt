@@ -60,6 +60,10 @@ impl EntityList {
         self.entities.len()
     }
 
+    pub fn is_empty(&self) -> bool {
+        self.entities.is_empty()
+    }
+
     pub async fn publish_config(
         &self,
         state: &StateHandle,

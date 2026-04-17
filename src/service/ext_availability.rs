@@ -11,6 +11,12 @@ pub struct AvailabilityExtension {
     last_state: Mutex<HashMap<String, (bool, u32)>>,
 }
 
+impl Default for AvailabilityExtension {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl AvailabilityExtension {
     pub fn new() -> Self {
         Self {

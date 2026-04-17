@@ -545,7 +545,7 @@ async fn mqtt_group_light_command(
     let groups = crate::service::device_config::get_groups();
     let group = groups
         .iter()
-        .find(|(gid, _)| gid.replace(' ', "_").to_ascii_lowercase() == id.to_ascii_lowercase())
+        .find(|(gid, _)| gid.replace(' ', "_").eq_ignore_ascii_case(&id))
         .map(|(_, g)| g)
         .ok_or_else(|| anyhow::anyhow!("group '{id}' not found"))?;
 

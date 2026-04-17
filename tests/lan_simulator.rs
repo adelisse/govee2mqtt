@@ -5,13 +5,13 @@
 //!
 //! Run with: cargo test --test lan_simulator
 
-use govee::lan_api::{DeviceColor, DeviceStatus, Response};
+use govee::lan_api::{DeviceColor, DeviceStatus};
 use serde_json::json;
-use std::net::SocketAddr;
 use std::sync::{Arc, Mutex};
 use tokio::net::UdpSocket;
 
 /// A simulated Govee device that responds to LAN protocol messages.
+#[allow(dead_code)]
 struct SimulatedDevice {
     sku: String,
     device_id: String,
