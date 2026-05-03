@@ -23,6 +23,10 @@ pub struct LightConfig {
     /// it is not passed
     pub state_topic: String,
     pub optimistic: bool,
+    /// Omit when empty — HA's MQTT light schema rejects an empty list with
+    /// "supported_color_modes must not be empty" and the integration drops
+    /// the entity entirely (issue #589, H6093 brightness-only bulbs).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
     pub supported_color_modes: Vec<String>,
     /// Flag that defines if the light supports brightness.
     #[serde(skip_serializing)]
@@ -153,24 +157,35 @@ fn effects_disabled() -> bool {
         .unwrap_or(false)
 }
 
-fn filter_effects(scenes: Vec<String>) -> Vec<String> {
-    let allowed = std::env::var("GOVEE_ALLOWED_EFFECTS").ok();
-    match allowed {
-        Some(allowed) if !allowed.trim().is_empty() => {
-            let allowed: Vec<String> = allowed
-                .split(',')
-                .map(|s| s.trim().to_ascii_lowercase())
-                .filter(|s| !s.is_empty())
-                .collect();
-            scenes
-                .into_iter()
-                .filter(|s| {
-                    s.is_empty() || allowed.iter().any(|a| a == &s.to_ascii_lowercase())
-                })
-                .collect()
-        }
-        _ => scenes,
-    }
+/// Apply effect allowlists to the scene list.
+///
+/// Precedence: per-device `allowed_effects` (from govee-device-config.json)
+/// overrides the global `GOVEE_ALLOWED_EFFECTS` env var. When either is set
+/// and non-empty, only names in the allowlist survive. Empty strings are
+/// preserved (they're used as separators in some workflows).
+fn filter_effects(scenes: Vec<String>, device_allowed: Option<Vec<String>>) -> Vec<String> {
+    let allowed: Option<Vec<String>> = device_allowed
+        .filter(|v| !v.is_empty())
+        .or_else(|| {
+            std::env::var("GOVEE_ALLOWED_EFFECTS").ok().and_then(|raw| {
+                let list: Vec<String> = raw
+                    .split(',')
+                    .map(|s| s.trim().to_string())
+                    .filter(|s| !s.is_empty())
+                    .collect();
+                (!list.is_empty()).then_some(list)
+            })
+        });
+
+    let Some(allowed) = allowed else {
+        return scenes;
+    };
+
+    let allowed_lc: Vec<String> = allowed.iter().map(|s| s.to_ascii_lowercase()).collect();
+    scenes
+        .into_iter()
+        .filter(|s| s.is_empty() || allowed_lc.iter().any(|a| a == &s.to_ascii_lowercase()))
+        .collect()
 }
 
 impl DeviceLight {
@@ -227,18 +242,21 @@ impl DeviceLight {
             seg = segment.map(|n| format!("-{n}")).unwrap_or_default()
         );
 
-        let device_effects_disabled = crate::service::device_config::get_device_override(
-            &device.id,
-            &device.sku,
-        )
-        .and_then(|ovr| ovr.disable_effects)
-        .unwrap_or(false);
+        let device_override =
+            crate::service::device_config::get_device_override(&device.id, &device.sku);
+        let device_effects_disabled = device_override
+            .as_ref()
+            .and_then(|ovr| ovr.disable_effects)
+            .unwrap_or(false);
+        let device_allowed_effects = device_override
+            .as_ref()
+            .and_then(|ovr| ovr.allowed_effects.clone());
 
         let effect_list = if segment.is_some() || effects_disabled() || device_effects_disabled {
             vec![]
         } else {
             match state.device_list_scenes(device).await {
-                Ok(scenes) => filter_effects(scenes),
+                Ok(scenes) => filter_effects(scenes, device_allowed_effects),
                 Err(err) => {
                     log::error!("Unable to list scenes for {device}: {err:#}");
                     vec![]
@@ -467,5 +485,58 @@ mod tests {
         light.notify_state(&client).await.unwrap();
 
         assert!(client.published_messages().is_empty());
+    }
+
+    /// Per-device `allowed_effects` must take precedence over
+    /// `GOVEE_ALLOWED_EFFECTS`. We prove this by passing a per-device
+    /// allowlist that includes `Sunset` — if the env path ran, the result
+    /// would be filtered to `Sunrise` only.
+    #[test]
+    fn filter_effects_per_device_overrides_env() {
+        // Serialize env access across tests in the same process.
+        static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
+        let _guard = ENV_LOCK.lock().unwrap();
+        // SAFETY: test-only; guarded by ENV_LOCK above.
+        unsafe { std::env::set_var("GOVEE_ALLOWED_EFFECTS", "Sunrise") };
+
+        let scenes = vec![
+            "Sunrise".to_string(),
+            "Sunset".to_string(),
+            "Party".to_string(),
+        ];
+        let filtered = super::filter_effects(
+            scenes,
+            Some(vec!["Sunset".to_string(), "Party".to_string()]),
+        );
+        assert_eq!(filtered, vec!["Sunset".to_string(), "Party".to_string()]);
+
+        unsafe { std::env::remove_var("GOVEE_ALLOWED_EFFECTS") };
+    }
+
+    #[test]
+    fn filter_effects_returns_input_when_no_allowlist() {
+        let scenes = vec!["Sunrise".to_string(), "Sunset".to_string()];
+        let filtered = super::filter_effects(scenes.clone(), None);
+        assert_eq!(filtered, scenes);
+    }
+
+    #[test]
+    fn filter_effects_is_case_insensitive_and_preserves_empty_separators() {
+        let scenes = vec![
+            "Sunrise".to_string(),
+            "".to_string(),
+            "SUNSET".to_string(),
+            "Party".to_string(),
+        ];
+        let filtered =
+            super::filter_effects(scenes, Some(vec!["sunrise".to_string(), "sunset".into()]));
+        assert_eq!(
+            filtered,
+            vec![
+                "Sunrise".to_string(),
+                "".to_string(),
+                "SUNSET".to_string(),
+            ]
+        );
     }
 }

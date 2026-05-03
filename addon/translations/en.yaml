@@ -104,6 +104,20 @@ configuration:
       discovery. Only matching effects are included
       (case-insensitive). Leave blank for all effects. Ignored
       when Disable Effects is enabled.
+  govee_app_version:
+    name: Govee App Version Override
+    description: >-
+      Override the Govee Home app version string sent in the undoc
+      API login header. Set this when login fails with "The app
+      version is too low" — check the current version on the App
+      Store / Play Store listing, enter it here, and restart.
+  govee_2fa_code:
+    name: Govee 2FA Code
+    description: >-
+      Verification code Govee emails you when a new-device login
+      is required. Leave blank on first run — the addon will trigger
+      Govee to send you a code and log an error. Set this value and
+      restart within ~15 minutes before the code expires.
   poll_interval:
     name: "Poll Interval (Advanced)"
     description: >-

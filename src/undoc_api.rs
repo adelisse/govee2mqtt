@@ -18,7 +18,34 @@ use uuid::Uuid;
 
 // <https://github.com/constructorfleet/homebridge-ultimate-govee/blob/main/src/data/clients/RestClient.ts>
 
-const APP_VERSION: &str = "6.5.02";
+/// Default Govee Home app version used for undocumented API calls.
+/// Govee rejects old versions with 400 "The app version is too low" — if this
+/// default stops working, users can override via `GOVEE_APP_VERSION` or
+/// `--govee-app-version` without waiting for a new release.
+const DEFAULT_APP_VERSION: &str = "7.4.10";
+
+fn resolve_app_version(arg: Option<&str>) -> String {
+    if let Some(v) = arg.map(str::trim).filter(|s| !s.is_empty()) {
+        return v.to_string();
+    }
+    if let Ok(Some(v)) = opt_env_var::<String>("GOVEE_APP_VERSION") {
+        if !v.trim().is_empty() {
+            return v;
+        }
+    }
+    DEFAULT_APP_VERSION.to_string()
+}
+
+/// Tracks the active app version so static helpers (e.g. the scene fetcher
+/// that has no `&self`) can read it without mutating `std::env`.
+/// Last writer wins — single-instance usage is the only supported case.
+static ACTIVE_APP_VERSION: Lazy<arc_swap::ArcSwap<String>> =
+    Lazy::new(|| arc_swap::ArcSwap::new(std::sync::Arc::new(DEFAULT_APP_VERSION.to_string())));
+
+fn active_app_version() -> std::sync::Arc<String> {
+    ACTIVE_APP_VERSION.load_full()
+}
+
 const HALF_DAY: Duration = Duration::from_secs(3600 * 12);
 const ONE_DAY: Duration = Duration::from_secs(86400);
 const ONE_WEEK: Duration = Duration::from_secs(86400 * 7);
@@ -62,10 +89,25 @@ impl<T: std::fmt::Debug> std::ops::Deref for Redacted<T> {
     }
 }
 
-fn user_agent() -> String {
-    format!(
-        "GoveeHome/{APP_VERSION} (com.ihoment.GoVeeSensor; build:2; iOS 16.5.0) Alamofire/5.6.4"
-    )
+fn user_agent(version: &str) -> String {
+    format!("GoveeHome/{version} (com.ihoment.GoVeeSensor; build:8; iOS 18.4.0) Alamofire/5.10.2")
+}
+
+/// Recognize Govee's "app version too low" response in the raw login reply
+/// and tell the user which knob to turn. Covers issues #622, #626, #627,
+/// #628, #637, #647, #649.
+fn app_version_hint(raw: &serde_json::Value, version: &str) -> Option<String> {
+    let message = raw.get("message").and_then(|v| v.as_str()).unwrap_or("");
+    if message.contains("app version is too low") || message.contains("upgrade the version") {
+        Some(format!(
+            "Govee rejected the login because the app version header ({version}) \
+             is below their current minimum. Update the current Govee Home \
+             app version (find it on the App Store / Play Store listing) and \
+             set it via --govee-app-version or $GOVEE_APP_VERSION, then restart."
+        ))
+    } else {
+        None
+    }
 }
 
 pub fn ms_timestamp() -> String {
@@ -101,6 +143,22 @@ pub struct UndocApiArguments {
     /// Where to find the AWS root CA certificate
     #[arg(long, global = true, default_value = "AmazonRootCA1.pem")]
     pub amazon_root_ca: PathBuf,
+
+    /// Override the Govee Home app version string sent in API headers.
+    /// Govee sometimes raises the minimum accepted version and returns
+    /// 400 "The app version is too low" — set this to the current app
+    /// version (e.g. "7.4.10") to recover without a new release.
+    /// You may also set this via the GOVEE_APP_VERSION environment variable.
+    #[arg(long, global = true)]
+    pub govee_app_version: Option<String>,
+
+    /// 2FA verification code emailed by Govee when login status 454 is
+    /// returned. On first run leave this blank; the bridge will log an
+    /// error and trigger Govee to email you a code. Set this value and
+    /// restart within ~15 minutes before the code expires.
+    /// You may also set this via the GOVEE_2FA_CODE environment variable.
+    #[arg(long, global = true)]
+    pub govee_2fa_code: Option<String>,
 }
 
 impl UndocApiArguments {
@@ -136,10 +194,22 @@ impl UndocApiArguments {
         })
     }
 
+    pub fn opt_2fa_code(&self) -> anyhow::Result<Option<String>> {
+        match &self.govee_2fa_code {
+            Some(code) if !code.trim().is_empty() => Ok(Some(code.trim().to_string())),
+            Some(_) => Ok(None),
+            None => Ok(opt_env_var::<String>("GOVEE_2FA_CODE")?
+                .and_then(|v| (!v.trim().is_empty()).then(|| v.trim().to_string()))),
+        }
+    }
+
     pub fn api_client(&self) -> anyhow::Result<GoveeUndocumentedApi> {
         let email = self.email()?;
         let password = self.password()?;
-        GoveeUndocumentedApi::new(email, password)
+        let version = resolve_app_version(self.govee_app_version.as_deref());
+        let two_fa_code = self.opt_2fa_code()?;
+        ACTIVE_APP_VERSION.store(std::sync::Arc::new(version.clone()));
+        GoveeUndocumentedApi::new(email, password, version, two_fa_code)
     }
 }
 
@@ -148,13 +218,23 @@ pub struct GoveeUndocumentedApi {
     email: String,
     password: String,
     client_id: String,
+    app_version: String,
+    user_agent: String,
+    two_fa_code: Option<String>,
     http: reqwest::Client,
 }
 
 impl GoveeUndocumentedApi {
-    pub fn new<E: Into<String>, P: Into<String>>(email: E, password: P) -> anyhow::Result<Self> {
+    pub fn new<E: Into<String>, P: Into<String>, V: Into<String>>(
+        email: E,
+        password: P,
+        app_version: V,
+        two_fa_code: Option<String>,
+    ) -> anyhow::Result<Self> {
         let email = email.into();
         let password = password.into();
+        let app_version = app_version.into();
+        let user_agent = user_agent(&app_version);
         let client_id = Uuid::new_v5(&Uuid::NAMESPACE_DNS, email.as_bytes());
         let client_id = format!("{}", client_id.simple());
         let http = reqwest::Client::builder()
@@ -165,6 +245,9 @@ impl GoveeUndocumentedApi {
             email,
             password,
             client_id,
+            app_version,
+            user_agent,
+            two_fa_code,
             http,
         })
     }
@@ -172,12 +255,12 @@ impl GoveeUndocumentedApi {
     /// Applies the standard Govee app headers to a request builder.
     fn govee_headers(&self, builder: reqwest::RequestBuilder) -> reqwest::RequestBuilder {
         builder
-            .header("appVersion", APP_VERSION)
+            .header("appVersion", &self.app_version)
             .header("clientId", &self.client_id)
             .header("clientType", "1")
             .header("iotVersion", "0")
             .header("timestamp", ms_timestamp())
-            .header("User-Agent", user_agent())
+            .header("User-Agent", &self.user_agent)
     }
 
     #[allow(unused)]
@@ -219,32 +302,93 @@ impl GoveeUndocumentedApi {
     }
 
     async fn login_account_impl(&self) -> anyhow::Result<CacheComputeResult<LoginAccountResponse>> {
+        let mut body = serde_json::json!({
+            "email": self.email,
+            "password": self.password,
+            "client": &self.client_id,
+        });
+        if let Some(code) = &self.two_fa_code {
+            body["code"] = serde_json::Value::String(code.clone());
+        }
+
         let request = self.http.request(
             Method::POST,
-            "https://app2.govee.com/account/rest/account/v1/login",
+            "https://app2.govee.com/account/rest/account/v2/login",
         );
-        let response = self
-            .govee_headers(request)
-            .json(&serde_json::json!({
-                "email": self.email,
-                "password": self.password,
-                "client": &self.client_id,
-            }))
-            .send()
-            .await?;
+        let response = self.govee_headers(request).json(&body).send().await?;
 
-        let resp: Response = http_response_body(response).await?;
+        // Read raw bytes so we can inspect the status code before deserializing
+        // into the happy-path Response shape — Govee returns a normal HTTP 200
+        // with status=454/455 in the JSON for 2FA events.
+        let url = response.url().clone();
+        let bytes = response.bytes().await.with_context(|| format!("reading {url}"))?;
+        let raw: serde_json::Value = serde_json::from_slice(&bytes)
+            .with_context(|| format!("parsing {url} login response as JSON"))?;
+        let status = raw.get("status").and_then(|v| v.as_u64()).unwrap_or(0);
+
+        if status == 454 {
+            if let Err(err) = self.request_2fa_code().await {
+                log::warn!(
+                    "Failed to ask Govee to send a 2FA code to {}: {err:#}",
+                    self.email
+                );
+            }
+            anyhow::bail!(
+                "Govee 2FA verification required. A code has been sent to {}. \
+                 Set --govee-2fa-code or $GOVEE_2FA_CODE to the code and restart \
+                 within ~15 minutes before it expires.",
+                self.email
+            );
+        }
+        if status == 455 {
+            anyhow::bail!(
+                "Govee 2FA verification code was incorrect or expired. \
+                 Clear --govee-2fa-code / $GOVEE_2FA_CODE and restart to request \
+                 a fresh code, then set the new code and restart again."
+            );
+        }
+
+        if let Some(hint) = app_version_hint(&raw, &self.app_version) {
+            anyhow::bail!("{hint}");
+        }
 
         #[derive(Deserialize, Serialize, Debug)]
         #[allow(non_snake_case, dead_code)]
-        struct Response {
+        struct ParsedResponse {
             client: LoginAccountResponse,
             message: String,
             status: u64,
         }
 
+        let resp: ParsedResponse = serde_json::from_slice(&bytes).with_context(|| {
+            format!("parsing {url} login response (status={status}): {}",
+                String::from_utf8_lossy(&bytes))
+        })?;
+
         let ttl = Duration::from_secs(resp.client.token_expire_cycle as u64);
         Ok(CacheComputeResult::WithTtl(resp.client, ttl))
+    }
+
+    /// Ask Govee to email a fresh 2FA code to the account owner. Called
+    /// automatically when login returns status 454.
+    async fn request_2fa_code(&self) -> anyhow::Result<()> {
+        let request = self.http.request(
+            Method::POST,
+            "https://app2.govee.com/account/rest/account/v1/verification",
+        );
+        let response = self
+            .govee_headers(request)
+            .json(&serde_json::json!({
+                "type": 8,
+                "email": self.email,
+            }))
+            .send()
+            .await?;
+        log::info!(
+            "Requested Govee 2FA verification code (HTTP {})",
+            response.status()
+        );
+        Ok(())
     }
 
     pub async fn login_account_cached(&self) -> anyhow::Result<LoginAccountResponse> {
@@ -254,7 +398,9 @@ impl GoveeUndocumentedApi {
                 key: "account-info",
                 soft_ttl: HALF_DAY,
                 hard_ttl: HALF_DAY,
-                negative_ttl: FIFTEEN_MINS,
+                // Keep negative TTL short so retries with a freshly-entered
+                // 2FA code aren't blocked by the cache.
+                negative_ttl: Duration::from_secs(10),
                 allow_stale: false,
             },
             async { self.login_account_impl().await },
@@ -370,8 +516,8 @@ impl GoveeUndocumentedApi {
                         ),
                     )
                     .timeout(Duration::from_secs(10))
-                    .header("AppVersion", APP_VERSION)
-                    .header("User-Agent", user_agent())
+                    .header("AppVersion", active_app_version().as_str())
+                    .header("User-Agent", user_agent(&active_app_version()))
                     .send()
                     .await?;
 
@@ -938,7 +1084,8 @@ mod test {
 
     #[test]
     fn client_construction_succeeds() {
-        GoveeUndocumentedApi::new("test@example.com", "password").unwrap();
+        GoveeUndocumentedApi::new("test@example.com", "password", DEFAULT_APP_VERSION, None)
+            .unwrap();
     }
 
     #[test]

@@ -1003,6 +1003,7 @@ enum_string! {
 pub enum DeviceType {
     Light = "devices.types.light",
     AirPurifier = "devices.types.air_purifier",
+    AirQualityMonitor = "devices.types.air_quality_monitor",
     Thermometer = "devices.types.thermometer",
     Socket = "devices.types.socket",
     Sensor = "devices.types.sensor",

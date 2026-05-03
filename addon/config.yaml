@@ -46,6 +46,14 @@ schema:
   scan: "str?"
   disable_effects: "bool?"
   allowed_effects: "str?"
+  # Override the Govee Home app version string sent in API headers.
+  # Set this when login fails with "The app version is too low".
+  govee_app_version: "str?"
+  # 2FA verification code emailed by Govee when a new-device login is
+  # required. Leave blank on first run; the bridge will trigger Govee
+  # to email you a code, then you set this value and restart within
+  # ~15 minutes before it expires.
+  govee_2fa_code: "password?"
   # Advanced: polling interval in seconds (default 120).
   # Increase to 900 if you have many devices without IoT/LAN support
   # to avoid exceeding the Govee API rate limit (10,000 req/day).

@@ -1175,8 +1175,10 @@ pub async fn spawn_hass_integration(
     state: StateHandle,
     args: &HassArguments,
 ) -> anyhow::Result<()> {
+    // Client IDs must not contain '/' — Mosquitto 7+ rejects them with
+    // "dangerous client id" (see issues #659, #661).
     let client = Client::with_id(
-        &format!("govee2mqtt/{}", uuid::Uuid::new_v4().simple()),
+        &format!("govee2mqtt-{}", uuid::Uuid::new_v4().simple()),
         true,
     )?;
 

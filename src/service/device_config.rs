@@ -16,6 +16,13 @@ pub struct DeviceOverride {
     pub prefer_lan: Option<bool>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub disable_effects: Option<bool>,
+    /// Per-device allowlist of effect names to publish in HA MQTT discovery.
+    /// When set (non-empty), only these effects will appear in `effect_list`.
+    /// Overrides the global `GOVEE_ALLOWED_EFFECTS` env var for this device.
+    /// Useful for keeping the Google Home SYNC payload under its size limit
+    /// without losing scene control inside HA.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub allowed_effects: Option<Vec<String>>,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub room: Option<String>,
     #[serde(skip_serializing_if = "Option::is_none")]
@@ -230,6 +237,7 @@ mod tests {
             color_temp_range: Some((2000, 6500)),
             prefer_lan: Some(true),
             disable_effects: None,
+            allowed_effects: Some(vec!["Sunrise".into(), "Sunset".into()]),
             room: Some("Living Room".into()),
             icon: Some("mdi:lightbulb".into()),
         };
@@ -239,6 +247,10 @@ mod tests {
         assert_eq!(parsed.color_temp_range, Some((2000, 6500)));
         assert_eq!(parsed.prefer_lan, Some(true));
         assert!(parsed.disable_effects.is_none());
+        assert_eq!(
+            parsed.allowed_effects.as_deref(),
+            Some(&["Sunrise".to_string(), "Sunset".to_string()][..])
+        );
         assert_eq!(parsed.room.as_deref(), Some("Living Room"));
         assert_eq!(parsed.icon.as_deref(), Some("mdi:lightbulb"));
     }
