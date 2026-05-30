@@ -3,7 +3,7 @@ image: ghcr.io/sitapix/govee2mqtt-{arch}
 version: "2026.05.02-4b224c2"
 slug: govee2mqtt-lite
 description: Control Govee Devices
-url: https://github.com/sitapix/govee2mqtt
+url: https://github.com/adelisse/govee2mqtt
 breaking_versions:
   - "2025.11.25-60a39bcc"
 arch:
